@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: docgen
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: DOCGEN_SECRET
+        sync: false
+      - key: DOCGEN_HOST
+        value: 0.0.0.0
