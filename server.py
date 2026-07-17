@@ -88,11 +88,9 @@ def _validate_license(key: str) -> dict:
 
 _OPENROUTER_KEY: str | None = None
 
-# Fallback chain: primary first, then valid-but-often-rate-limited models.
+# Single reliable free model (hy3 doesn't hit rate limits).
 _MODELS = [
     "tencent/hy3:free",
-    "qwen/qwen3-coder:free",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
 ]
 
 _SOURCE_EXT = {
