@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -22,6 +22,16 @@
     --red: oklch(0.6 0.22 25);
     --radius: 10px;
     --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  :root[data-theme="light"] {
+    --bg: oklch(0.98 0.005 277);
+    --surface: oklch(1 0 0);
+    --surface-2: oklch(0.95 0.008 277);
+    --border: oklch(0.88 0.01 277);
+    --text: oklch(0.22 0.02 277);
+    --text-dim: oklch(0.48 0.02 277);
+    --accent: oklch(0.55 0.22 265);
+    --accent-hover: oklch(0.48 0.25 265);
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html { font-size: 16px; scroll-behavior: smooth; }
@@ -283,6 +293,49 @@
   /* Spinner */
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: .5rem; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Theme toggle + stats counter */
+  .icon-btn { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: var(--radius); cursor: pointer; font-size: 1rem; display: inline-flex; align-items: center; justify-content: center; transition: all .2s; }
+  .icon-btn:hover { border-color: var(--accent); }
+  .stat-pill { font-size: .8rem; color: var(--text-dim); display: flex; align-items: center; gap: .4rem; }
+  .stat-pill b { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+  /* Input-mode tabs */
+  .mode-tabs { display: flex; gap: .25rem; margin-bottom: 1.2rem; }
+  .mode-tab { flex: 1; text-align: center; padding: .55rem; border-radius: var(--radius); background: var(--bg); border: 1px solid var(--border); cursor: pointer; font-size: .85rem; color: var(--text-dim); transition: all .2s; }
+  .mode-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .mode-panel { display: none; }
+  .mode-panel.active { display: block; }
+  .gen-box textarea { width: 100%; min-height: 180px; padding: .8rem 1rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); color: var(--text); font-family: 'Cascadia Code','JetBrains Mono',monospace; font-size: .85rem; outline: none; resize: vertical; }
+  .gen-box textarea:focus { border-color: var(--accent); }
+  .gen-box input[type="text"].filename-in { width: 100%; margin-top: .6rem; padding: .6rem 1rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: .9rem; outline: none; }
+  .dropzone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 2.5rem 1rem; text-align: center; color: var(--text-dim); cursor: pointer; transition: all .2s; }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--text); background: color-mix(in oklch, var(--accent) 6%, transparent); }
+  .dropzone input { display: none; }
+
+  /* Progress bar */
+  .progress-wrap { margin-top: 1rem; display: none; }
+  .progress-wrap.show { display: block; }
+  .progress-track { height: 8px; background: var(--surface-2); border-radius: 20px; overflow: hidden; }
+  .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); border-radius: 20px; transition: width .4s ease; }
+  .progress-label { font-size: .82rem; color: var(--text-dim); margin-top: .5rem; display: flex; justify-content: space-between; }
+
+  /* Mermaid diagram container */
+  .mermaid-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin: .8rem 0; overflow-x: auto; text-align: center; }
+  .mermaid-box svg { max-width: 100%; height: auto; }
+
+  /* Examples gallery */
+  #gallery { max-width: 900px; margin: 0 auto; padding: 2rem 2rem 4rem; }
+  #gallery h2 { text-align: center; font-size: 1.8rem; margin-bottom: .5rem; }
+  #gallery > p { text-align: center; color: var(--text-dim); margin-bottom: 2rem; }
+  .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.2rem; }
+  .gallery-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.3rem; cursor: pointer; transition: all .2s; }
+  .gallery-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .gallery-card h3 { font-size: 1.05rem; display: flex; align-items: center; gap: .4rem; }
+  .gallery-card .lang { font-size: .7rem; background: var(--surface-2); color: var(--accent); padding: .15rem .5rem; border-radius: 20px; font-weight: 600; }
+  .gallery-card p { font-size: .85rem; color: var(--text-dim); margin: .5rem 0 .8rem; }
+  .gallery-card .doclist { display: flex; gap: .3rem; flex-wrap: wrap; }
+  .gallery-card .doclist span { font-size: .68rem; color: var(--text-dim); border: 1px solid var(--border); border-radius: 4px; padding: .1rem .4rem; }
 </style>
 </head>
 <body>
@@ -291,32 +344,59 @@
   <div class="logo"><span>◆</span> DocGen</div>
   <nav>
     <a href="#generator">Generate</a>
+    <a href="#gallery">Examples</a>
     <a href="#pricing">Pricing</a>
     <a href="#how">How it Works</a>
+    <span class="stat-pill" id="stat-pill" title="Docs generated so far"></span>
+    <button class="icon-btn" id="theme-toggle" title="Toggle theme" onclick="toggleTheme()">🌙</button>
     <a class="btn btn-primary" href="#generator">Try Free</a>
   </nav>
 </header>
 
 <section class="hero">
   <h1>Documentation that <span>writes itself</span></h1>
-  <p>Paste any public GitHub repo URL. Get a beautiful README, complete API docs, and a contributing guide — generated by AI in seconds.</p>
+  <p>Paste a GitHub URL, drop a code snippet, or upload a zip. Get a beautiful README, API docs, architecture diagrams, and more — generated by AI in seconds.</p>
 </section>
 
 <section class="generator" id="generator">
   <div class="gen-box">
-    <label for="repo-url">GitHub Repository URL</label>
-    <input type="url" id="repo-url" placeholder="https://github.com/owner/repo" autocomplete="url" spellcheck="false">
+    <div class="mode-tabs">
+      <div class="mode-tab active" data-mode="url" onclick="switchMode('url')">GitHub URL</div>
+      <div class="mode-tab" data-mode="paste" onclick="switchMode('paste')">Paste Code</div>
+      <div class="mode-tab" data-mode="zip" onclick="switchMode('zip')">Upload Zip</div>
+    </div>
+
+    <div class="mode-panel active" id="panel-url">
+      <label for="repo-url">GitHub Repository URL</label>
+      <input type="url" id="repo-url" placeholder="https://github.com/owner/repo" autocomplete="url" spellcheck="false">
+      <div class="examples" id="examples">
+        <span class="example-tag">https://github.com/pallets/flask</span>
+        <span class="example-tag">https://github.com/psf/requests</span>
+        <span class="example-tag">https://github.com/expressjs/express</span>
+      </div>
+    </div>
+
+    <div class="mode-panel" id="panel-paste">
+      <label for="paste-code">Paste your source code</label>
+      <textarea id="paste-code" placeholder="Paste a file or snippet here..." spellcheck="false"></textarea>
+      <input type="text" class="filename-in" id="paste-filename" placeholder="filename (e.g. app.py, index.ts)" value="main.py">
+    </div>
+
+    <div class="mode-panel" id="panel-zip">
+      <label>Upload a project zip</label>
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('zip-input').click()">
+        <div id="dropzone-label">Click to choose a .zip file, or drag &amp; drop here</div>
+        <input type="file" id="zip-input" accept=".zip">
+      </div>
+    </div>
 
     <div class="options">
       <label><input type="checkbox" id="opt-readme" checked> README</label>
       <label><input type="checkbox" id="opt-api" checked> API Docs</label>
       <label><input type="checkbox" id="opt-contributing" checked> Contributing</label>
-    </div>
-
-    <div class="examples" id="examples">
-      <span class="example-tag">https://github.com/facebook/react</span>
-      <span class="example-tag">https://github.com/torvalds/linux</span>
-      <span class="example-tag">https://github.com/pallets/flask</span>
+      <label><input type="checkbox" id="opt-architecture"> Architecture + Diagram</label>
+      <label><input type="checkbox" id="opt-changelog"> Changelog</label>
+      <label><input type="checkbox" id="opt-env"> .env.example</label>
     </div>
 
     <div class="license-row" id="license-row">
@@ -329,14 +409,28 @@
       <button class="btn btn-secondary" onclick="document.getElementById('license-row').style.display='flex'">Have a license key?</button>
     </div>
 
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-label"><span id="progress-step">Starting…</span><span id="progress-pct">0%</span></div>
+    </div>
+
     <div id="status"></div>
   </div>
 </section>
 
 <section id="output">
-  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:var(--text-dim)">Generated Documentation</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+    <h2 style="font-size:1.2rem;color:var(--text-dim)">Generated Documentation</h2>
+    <button class="btn btn-secondary" id="download-all" onclick="downloadAll()" style="font-size:.8rem;padding:.5rem 1rem">⬇ Download All</button>
+  </div>
   <div class="tabs" id="tabs"></div>
   <div id="tab-contents"></div>
+</section>
+
+<section id="gallery">
+  <h2>Example Output</h2>
+  <p>See the quality before you generate. Click any project to load it.</p>
+  <div class="gallery-grid" id="gallery-grid"></div>
 </section>
 
 <section id="pricing">
@@ -358,6 +452,7 @@
   Powered by <a href="#">Forge Engine</a> &middot; Built with free AI models &middot; <a href="mailto:support@docgen.dev">Contact</a>
 </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
 // ---- Pricing data ----
 const PLANS = [
@@ -382,6 +477,94 @@ function renderPricing() {
 }
 renderPricing();
 
+// ---- Theme ----
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('theme-toggle').textContent = t === 'light' ? '☀️' : '🌙';
+  try { localStorage.setItem('docgen-theme', t); } catch (e) {}
+  if (window.mermaid) {
+    try { mermaid.initialize({ startOnLoad: false, theme: t === 'light' ? 'default' : 'dark' }); } catch (e) {}
+  }
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  applyTheme(cur === 'light' ? 'dark' : 'light');
+  if (window._lastData) showOutput(window._lastData);
+}
+(function initTheme() {
+  let t = 'dark';
+  try { t = localStorage.getItem('docgen-theme') || 'dark'; } catch (e) {}
+  applyTheme(t);
+})();
+
+// ---- Mermaid init ----
+if (window.mermaid) {
+  const t = document.documentElement.getAttribute('data-theme');
+  try { mermaid.initialize({ startOnLoad: false, theme: t === 'light' ? 'default' : 'dark' }); } catch (e) {}
+}
+
+// ---- Input mode ----
+let _mode = 'url';
+function switchMode(m) {
+  _mode = m;
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-mode') === m));
+  document.querySelectorAll('.mode-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + m));
+}
+
+// ---- Zip upload ----
+let _zipB64 = '', _zipName = '';
+const zipInput = document.getElementById('zip-input');
+const dropzone = document.getElementById('dropzone');
+function handleZip(file) {
+  if (!file) return;
+  _zipName = file.name;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const b = reader.result.split(',')[1] || '';
+    _zipB64 = b;
+    document.getElementById('dropzone-label').textContent = '✓ ' + file.name + ' ready';
+  };
+  reader.readAsDataURL(file);
+}
+zipInput.addEventListener('change', () => handleZip(zipInput.files[0]));
+['dragover', 'dragenter'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e => { if (e.dataTransfer.files[0]) handleZip(e.dataTransfer.files[0]); });
+
+// ---- Stats counter ----
+async function loadStats() {
+  try {
+    const r = await fetch('/stats');
+    const d = await r.json();
+    const n = (d.total_docs || 0);
+    if (n > 0) document.getElementById('stat-pill').innerHTML = `<b>${n.toLocaleString()}</b> docs generated`;
+  } catch (e) {}
+}
+loadStats();
+
+// ---- Examples gallery ----
+async function loadGallery() {
+  try {
+    const r = await fetch('/examples');
+    const d = await r.json();
+    const grid = document.getElementById('gallery-grid');
+    const labels = { readme: 'README', api_docs: 'API', contributing: 'Contributing', architecture: 'Architecture', changelog: 'Changelog', env_example: '.env' };
+    grid.innerHTML = (d.examples || []).map(ex => `
+      <div class="gallery-card" onclick="loadExample('${ex.repo}')">
+        <h3>${escapeHtml(ex.name)} <span class="lang">${escapeHtml(ex.lang)}</span></h3>
+        <p>${escapeHtml(ex.desc)}</p>
+        <div class="doclist">${(ex.docs || []).map(x => `<span>${labels[x] || x}</span>`).join('')}</div>
+      </div>`).join('');
+  } catch (e) {}
+}
+loadGallery();
+function loadExample(repo) {
+  switchMode('url');
+  document.getElementById('repo-url').value = repo;
+  document.getElementById('generator').scrollIntoView({ behavior: 'smooth' });
+  document.getElementById('gen-btn').focus();
+}
+
 // ---- Example tags ----
 document.querySelectorAll('.example-tag').forEach(el => {
   el.addEventListener('click', () => {
@@ -390,52 +573,97 @@ document.querySelectorAll('.example-tag').forEach(el => {
   });
 });
 
-// ---- Generate ----
+// ---- Generate (job-based with progress polling) ----
 let _generated = {};
 
-async function generate() {
-  const url = document.getElementById('repo-url').value.trim();
-  if (!url) { setStatus('Please enter a GitHub URL', 'error'); return; }
-
-  const licenseKey = document.getElementById('license-key').value.trim();
+function buildRequest() {
   const options = {
     readme: document.getElementById('opt-readme').checked,
     api: document.getElementById('opt-api').checked,
     contributing: document.getElementById('opt-contributing').checked,
+    architecture: document.getElementById('opt-architecture').checked,
+    changelog: document.getElementById('opt-changelog').checked,
+    env: document.getElementById('opt-env').checked,
   };
+  const licenseKey = document.getElementById('license-key').value.trim();
+  const req = { mode: _mode, options, license_key: licenseKey };
+  if (_mode === 'url') {
+    req.url = document.getElementById('repo-url').value.trim();
+    if (!req.url) return { error: 'Please enter a GitHub URL' };
+  } else if (_mode === 'paste') {
+    req.code = document.getElementById('paste-code').value;
+    req.filename = document.getElementById('paste-filename').value.trim() || 'main.py';
+    req.name = req.filename;
+    if (!req.code.trim()) return { error: 'Please paste some code' };
+  } else if (_mode === 'zip') {
+    req.zip_b64 = _zipB64;
+    req.name = _zipName || 'uploaded-project';
+    if (!req.zip_b64) return { error: 'Please choose a .zip file' };
+  }
+  return req;
+}
 
-  setStatus('Generating documentation... <span class="spinner"></span>', 'pending');
+function setProgress(pct, step) {
+  const wrap = document.getElementById('progress-wrap');
+  wrap.classList.add('show');
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+  if (step) document.getElementById('progress-step').textContent = step;
+}
+function hideProgress() { document.getElementById('progress-wrap').classList.remove('show'); }
+
+async function generate() {
+  const req = buildRequest();
+  if (req.error) { setStatus(req.error, 'error'); return; }
+
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+  setStatus('Starting generation… <span class="spinner"></span>', 'pending');
+  setProgress(2, 'Queued');
 
   try {
-    // Step 1: Register the generation
-    let resp = await fetch('/generate', {
+    let resp = await fetch('/generate-start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, license_key: licenseKey }),
+      body: JSON.stringify(req),
     });
     let data = await resp.json();
-    if (data.error) { setStatus(data.error, 'error'); return; }
+    if (data.error) { setStatus(data.error, 'error'); hideProgress(); btn.disabled = false; return; }
 
-    // Step 2: Get the result
-    resp = await fetch('/generate-result', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, options }),
-    });
-    data = await resp.json();
-
-    if (data.error) { setStatus(data.error, 'error'); return; }
-
-    _generated = data;
-    showOutput(data);
-    setStatus('Documentation generated successfully!', 'success');
+    const job = data.job;
+    let done = false, tries = 0;
+    while (!done && tries < 300) {
+      await new Promise(r => setTimeout(r, 1500));
+      tries++;
+      let sr = await fetch('/generate-status?job=' + encodeURIComponent(job));
+      let sd = await sr.json();
+      if (sd.error) { setStatus(sd.error, 'error'); hideProgress(); break; }
+      setProgress(Math.max(2, sd.progress || 0), sd.step || 'Working…');
+      if (sd.status === 'done') {
+        done = true;
+        setProgress(100, 'Complete');
+        _generated = sd;
+        window._lastData = sd;
+        showOutput(sd);
+        setStatus(sd.cached ? 'Loaded from cache!' : 'Documentation generated successfully!', 'success');
+        setTimeout(hideProgress, 1200);
+      } else if (sd.status === 'error') {
+        done = true;
+        setStatus(sd.error || 'Generation failed', 'error');
+        hideProgress();
+      }
+    }
+    if (!done) { setStatus('Timed out. Please try again.', 'error'); hideProgress(); }
   } catch (e) {
     setStatus('Network error: ' + e.message, 'error');
+    hideProgress();
+  } finally {
+    btn.disabled = false;
   }
 }
 
 function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Minimal, safe Markdown -> HTML renderer (escapes first, then formats).
@@ -454,8 +682,14 @@ function renderMarkdown(md) {
   for (let raw of lines) {
     const fence = raw.match(/^```(\w*)/);
     if (fence) {
-      if (inCode) { html += `<pre class="code"><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`; inCode = false; codeBuf = []; }
-      else { closeList(); inCode = true; codeLang = fence[1]; }
+      if (inCode) {
+        if (codeLang === 'mermaid') {
+          html += `<div class="mermaid-box"><pre class="mermaid">${escapeHtml(codeBuf.join('\n'))}</pre></div>`;
+        } else {
+          html += `<pre class="code"><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
+        }
+        inCode = false; codeBuf = [];
+      } else { closeList(); inCode = true; codeLang = fence[1]; }
       continue;
     }
     if (inCode) { codeBuf.push(raw); continue; }
@@ -482,6 +716,15 @@ function renderMarkdown(md) {
   return html;
 }
 
+const SECTIONS = [
+  { id: 'readme', label: 'README', file: 'README.md' },
+  { id: 'api_docs', label: 'API Docs', file: 'API.md' },
+  { id: 'contributing', label: 'Contributing', file: 'CONTRIBUTING.md' },
+  { id: 'architecture', label: 'Architecture', file: 'ARCHITECTURE.md' },
+  { id: 'changelog', label: 'Changelog', file: 'CHANGELOG.md' },
+  { id: 'env_example', label: '.env.example', file: '.env.example' },
+];
+
 function showOutput(data) {
   const container = document.getElementById('output');
   container.style.display = 'block';
@@ -492,17 +735,12 @@ function showOutput(data) {
   tabs.innerHTML = '';
   contents.innerHTML = '';
 
-  const sections = [
-    { id: 'readme', label: 'README', file: 'README.md', content: data.readme },
-    { id: 'api_docs', label: 'API Docs', file: 'API.md', content: data.api_docs },
-    { id: 'contributing', label: 'Contributing', file: 'CONTRIBUTING.md', content: data.contributing },
-  ];
-
   const isError = (c) => !c || (c.startsWith('*') && c.endsWith('*') && c.includes('failed'));
-
   let firstShown = false;
-  sections.forEach((s) => {
-    if (isError(s.content)) return;
+
+  SECTIONS.forEach((s) => {
+    const content = data[s.id];
+    if (isError(content)) return;
     const active = !firstShown;
     firstShown = true;
 
@@ -528,7 +766,7 @@ function showOutput(data) {
     copyBtn.className = 'copy-btn';
     copyBtn.textContent = 'Copy';
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(s.content);
+      navigator.clipboard.writeText(content);
       copyBtn.textContent = 'Copied!';
       setTimeout(() => copyBtn.textContent = 'Copy', 2000);
     };
@@ -536,14 +774,7 @@ function showOutput(data) {
     const dlBtn = document.createElement('button');
     dlBtn.className = 'copy-btn';
     dlBtn.textContent = 'Download';
-    dlBtn.onclick = () => {
-      const blob = new Blob([s.content], { type: 'text/markdown' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = s.file;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    };
+    dlBtn.onclick = () => downloadFile(s.file, content);
 
     bar.appendChild(toggleBtn);
     bar.appendChild(copyBtn);
@@ -551,10 +782,10 @@ function showOutput(data) {
 
     const rendered = document.createElement('div');
     rendered.className = 'markdown-body';
-    rendered.innerHTML = renderMarkdown(s.content);
+    rendered.innerHTML = renderMarkdown(content);
 
     const pre = document.createElement('pre');
-    pre.textContent = s.content;
+    pre.textContent = content;
     pre.style.display = 'none';
 
     let rawMode = false;
@@ -580,6 +811,16 @@ function showOutput(data) {
     div.appendChild(pre);
     contents.appendChild(div);
   }
+
+  // Render any Mermaid diagrams now that nodes are in the DOM.
+  if (window.mermaid) {
+    const nodes = contents.querySelectorAll('.mermaid');
+    if (nodes.length) {
+      try { mermaid.run({ nodes }); } catch (e) {
+        try { mermaid.init(undefined, nodes); } catch (e2) {}
+      }
+    }
+  }
 }
 
 function switchTab(id) {
@@ -587,6 +828,26 @@ function switchTab(id) {
     t.classList.toggle('active', t.getAttribute('data-target') === id));
   document.querySelectorAll('.tab-content').forEach(t =>
     t.classList.toggle('active', t.id === 'tab-' + id));
+}
+
+function downloadFile(name, content) {
+  const blob = new Blob([content], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function downloadAll() {
+  let n = 0;
+  SECTIONS.forEach((s, i) => {
+    const content = _generated[s.id];
+    if (!content || (content.startsWith('*') && content.includes('failed'))) return;
+    setTimeout(() => downloadFile(s.file, content), n * 250);
+    n++;
+  });
+  if (n === 0) setStatus('Nothing to download yet.', 'error');
 }
 
 // ---- License key ----

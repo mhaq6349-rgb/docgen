@@ -8,6 +8,7 @@ Zero-dependency HTTP server using stdlib only.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import io
@@ -16,13 +17,14 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import uuid
 import zipfile
 from html import escape
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -32,6 +34,43 @@ sys.path.insert(0, str(FORGE_HOME))
 
 _HOST = os.environ.get("DOCGEN_HOST", "0.0.0.0")
 _PORT = int(os.environ.get("PORT", "8326"))
+_VERSION = "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Global counters (social proof) + result cache + job registry
+# ---------------------------------------------------------------------------
+
+_STATS_FILE = DOCGEN_DIR / "stats.json"
+_stats_lock = threading.Lock()
+_stats: dict[str, int] = {}
+
+_CACHE_TTL = 3600
+_cache: dict[str, tuple[float, dict]] = {}
+_cache_lock = threading.Lock()
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _load_stats() -> None:
+    global _stats
+    with _stats_lock:
+        if _STATS_FILE.exists():
+            try:
+                _stats = json.loads(_STATS_FILE.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                _stats = {}
+        _stats.setdefault("total_docs", 0)
+        _stats.setdefault("total_repos", 0)
+
+
+def _bump_stat(key: str, n: int = 1) -> None:
+    with _stats_lock:
+        _stats[key] = _stats.get(key, 0) + n
+        try:
+            _STATS_FILE.write_text(json.dumps(_stats, indent=2), encoding="utf-8")
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # License key system (HMAC-based — no DB needed)
@@ -342,6 +381,114 @@ def _generate_contributing(tmp_dir: Path) -> str:
     return _strip_fences(_llm_ask(prompt, temperature=0.4, max_tokens=3072))
 
 
+def _generate_architecture(tmp_dir: Path) -> str:
+    """Generate an architecture overview with a Mermaid diagram."""
+    project_name = tmp_dir.resolve().name
+    sources = _collect_sources(tmp_dir, limit=8, max_lines=60)
+
+    tree_lines: list[str] = []
+    count = 0
+    for f in sorted(tmp_dir.rglob("*")):
+        if count >= 60:
+            break
+        if any(part in _SKIP_DIRS for part in f.parts):
+            continue
+        if f.is_file() and (f.suffix.lower() in _SOURCE_EXT or f.name in
+                            ("package.json", "pyproject.toml", "Cargo.toml", "go.mod")):
+            tree_lines.append(str(f.relative_to(tmp_dir)).replace("\\", "/"))
+            count += 1
+    tree = "\n".join(tree_lines)
+
+    excerpts = "\n\n".join(
+        f"### `{rel}`\n```{_detect_language(rel)}\n{src}\n```" for rel, src in sources[:5]
+    )
+
+    prompt = (
+        f"You are a software architect. Analyze the project '{project_name}' and write an "
+        f"'# Architecture' document in Markdown. Include:\n"
+        f"1. A high-level overview paragraph.\n"
+        f"2. A Mermaid diagram (```mermaid code block) showing the main components/modules "
+        f"and how they relate (use 'graph TD' or 'flowchart TD'). Keep node labels short.\n"
+        f"3. A 'Components' section describing each major module's responsibility.\n"
+        f"4. A 'Data / Control Flow' section.\n"
+        f"Be accurate to the file structure and code shown. Keep the Mermaid syntax valid.\n\n"
+        f"File structure:\n{tree}\n\nKey source excerpts:\n{excerpts}"
+    )
+    return _strip_fences(_llm_ask(prompt, temperature=0.3, max_tokens=3072))
+
+
+def _generate_changelog(tmp_dir: Path) -> str:
+    """Generate a CHANGELOG. Uses existing changelog / release notes as context."""
+    project_name = tmp_dir.resolve().name
+    context_parts = []
+    for name, content in _read_first(tmp_dir, "CHANGELOG*", 150):
+        context_parts.append(f"--- Existing {name} ---\n{content}\n")
+    for pattern in ("pyproject.toml", "package.json", "Cargo.toml"):
+        for name, content in _read_first(tmp_dir, pattern, 40):
+            context_parts.append(f"--- {name} ---\n{content}\n")
+
+    context = "\n".join(context_parts)
+    prompt = (
+        f"Generate a CHANGELOG.md for '{project_name}' following the 'Keep a Changelog' "
+        f"format with an [Unreleased] section and semantic-versioning headings. "
+        f"Include categories: Added, Changed, Fixed, Removed. If little history is "
+        f"available, produce a clean starter changelog template with a first version entry. "
+        f"Use Markdown.\n\nContext:\n{context}"
+    )
+    return _strip_fences(_llm_ask(prompt, temperature=0.3, max_tokens=2048))
+
+
+def _generate_env_example(tmp_dir: Path) -> str:
+    """Scan source for env-var usage and produce a .env.example."""
+    patterns = [
+        r"process\.env\.([A-Z_][A-Z0-9_]+)",
+        r"os\.environ\.get\(['\"]([A-Z_][A-Z0-9_]+)['\"]",
+        r"os\.environ\[['\"]([A-Z_][A-Z0-9_]+)['\"]\]",
+        r"os\.getenv\(['\"]([A-Z_][A-Z0-9_]+)['\"]",
+        r"env::var\(['\"]([A-Z_][A-Z0-9_]+)['\"]",
+        r"ENV\[['\"]([A-Z_][A-Z0-9_]+)['\"]\]",
+        r"getenv\(['\"]([A-Z_][A-Z0-9_]+)['\"]",
+    ]
+    found: set[str] = set()
+    scanned = 0
+    for f in tmp_dir.rglob("*"):
+        if scanned >= 200:
+            break
+        if not f.is_file() or f.suffix.lower() not in _SOURCE_EXT:
+            continue
+        if any(part in _SKIP_DIRS for part in f.parts):
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        scanned += 1
+        for pat in patterns:
+            found.update(re.findall(pat, text))
+
+    for name, content in _read_first(tmp_dir, ".env.example", 200) + _read_first(tmp_dir, ".env.sample", 200):
+        for m in re.findall(r"^([A-Z_][A-Z0-9_]+)=", content, re.MULTILINE):
+            found.add(m)
+
+    if not found:
+        return ("No environment variables detected in the source code. "
+                "This project may not require any configuration via `.env`.")
+
+    env_vars = sorted(found)
+    var_list = "\n".join(env_vars)
+    prompt = (
+        "Create a .env.example file. For each environment variable below, add a short "
+        "'# comment' explaining its purpose and a sensible placeholder value "
+        "(VAR=your-value-here). Group related variables. Output as a plain code block "
+        "with `# comments`.\n\nDetected variables:\n" + var_list
+    )
+    try:
+        body = _strip_fences(_llm_ask(prompt, temperature=0.2, max_tokens=1500))
+        return f"```bash\n{body}\n```" if not body.strip().startswith("```") else body
+    except Exception:
+        return "```bash\n" + "\n".join(f"{v}=your-value-here" for v in env_vars) + "\n```"
+
+
 def _download_repo(repo_url: str, dst: Path) -> str:
     """Download a GitHub repo as zip using stdlib. Returns project name."""
     parts = repo_url.rstrip("/").split("/")
@@ -372,47 +519,196 @@ def _download_repo(repo_url: str, dst: Path) -> str:
     return repo
 
 
-def _generate_docs(repo_url: str, options: dict) -> dict:
-    """Generate documentation for a repo. Returns {readme, api_docs, contributing}."""
-    result: dict[str, str] = {}
+def _acquire_sources(mode: str, payload: dict, dst: Path) -> str:
+    """Prepare a source directory for any input mode. Returns a project label."""
+    if mode == "url":
+        repo_url = payload.get("url", "").strip()
+        return _download_repo(repo_url, dst)
 
-    repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "") or "project"
-    tmp_dir = DOCGEN_DIR / "tmp" / f"{repo_name}-{uuid.uuid4().hex[:8]}"
+    if mode == "paste":
+        code = payload.get("code", "")
+        filename = payload.get("filename", "").strip() or "main.py"
+        filename = os.path.basename(filename)
+        if not code.strip():
+            raise RuntimeError("no code provided")
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / filename).write_text(code, encoding="utf-8")
+        return payload.get("name", "pasted-snippet")
 
+    if mode == "zip":
+        b64 = payload.get("zip_b64", "")
+        if not b64:
+            raise RuntimeError("no zip data provided")
+        try:
+            raw = base64.b64decode(b64)
+        except Exception as e:
+            raise RuntimeError(f"invalid zip data: {e}")
+        dst.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            for member in zf.namelist():
+                if member.startswith("/") or ".." in member:
+                    continue
+                zf.extract(member, dst)
+        entries = [p for p in dst.iterdir()]
+        if len(entries) == 1 and entries[0].is_dir():
+            inner = entries[0]
+            for item in inner.iterdir():
+                shutil.move(str(item), str(dst / item.name))
+            shutil.rmtree(inner, ignore_errors=True)
+        return payload.get("name", "uploaded-project")
+
+    raise RuntimeError(f"unknown input mode: {mode}")
+
+
+# Maps option flag -> (result key, step label, generator fn)
+_DOC_STEPS: list[tuple[str, str, str, Callable[[Path], str]]] = [
+    ("readme", "readme", "Writing README", _generate_readme),
+    ("api", "api_docs", "Documenting API", _generate_api_docs),
+    ("contributing", "contributing", "Drafting Contributing guide", _generate_contributing),
+    ("architecture", "architecture", "Mapping architecture + diagram", _generate_architecture),
+    ("changelog", "changelog", "Generating CHANGELOG", _generate_changelog),
+    ("env", "env_example", "Detecting env vars", _generate_env_example),
+]
+
+
+def _cache_key(mode: str, payload: dict, options: dict) -> str:
+    if mode == "url":
+        ident = payload.get("url", "").strip().lower()
+    elif mode == "paste":
+        ident = "paste:" + hashlib.sha256(payload.get("code", "").encode()).hexdigest()
+    else:
+        ident = "zip:" + hashlib.sha256(payload.get("zip_b64", "").encode()).hexdigest()
+    opt_str = ",".join(sorted(k for k, v in options.items() if v))
+    return hashlib.sha256(f"{ident}|{opt_str}".encode()).hexdigest()
+
+
+def _run_job(job_id: str, mode: str, payload: dict, options: dict) -> None:
+    """Background worker: acquire sources, run each requested generator, update progress."""
+    ck = _cache_key(mode, payload, options)
+    with _cache_lock:
+        cached = _cache.get(ck)
+        if cached and time.time() - cached[0] < _CACHE_TTL:
+            with _jobs_lock:
+                _jobs[job_id].update(cached[1], status="done", progress=100, cached=True)
+            return
+
+    steps = [s for s in _DOC_STEPS if options.get(s[0], False)]
+    if not steps:
+        steps = [s for s in _DOC_STEPS if s[0] in ("readme", "api", "contributing")]
+    total = len(steps) + 1
+
+    label = payload.get("url") or payload.get("name") or "project"
+    src_name = re.sub(r"[^A-Za-z0-9_.-]", "", str(label).split("/")[-1]).replace(".git", "") or "project"
+    work_parent = DOCGEN_DIR / "tmp" / uuid.uuid4().hex[:12]
+    tmp_dir = work_parent / src_name
+
+    def set_progress(done: int, msg: str) -> None:
+        with _jobs_lock:
+            _jobs[job_id]["progress"] = int(done / total * 100)
+            _jobs[job_id]["step"] = msg
+
+    set_progress(0, "Fetching source")
     try:
+        work_parent.mkdir(parents=True, exist_ok=True)
+        _acquire_sources(mode, payload, tmp_dir)
+    except Exception as e:
+        shutil.rmtree(work_parent, ignore_errors=True)
+        with _jobs_lock:
+            _jobs[job_id].update(status="error", error=f"Could not load source: {e}")
+        return
+
+    result: dict[str, Any] = {"repo": label,
+                              "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        for i, (_flag, key, step_label, fn) in enumerate(steps, start=1):
+            set_progress(i, step_label)
+            try:
+                result[key] = fn(tmp_dir)
+            except Exception as e:
+                result[key] = f"*{step_label} failed: {e}*"
+            with _jobs_lock:
+                _jobs[job_id][key] = result[key]
+            _bump_stat("total_docs")
+    finally:
+        shutil.rmtree(work_parent, ignore_errors=True)
+
+    _bump_stat("total_repos")
+    with _cache_lock:
+        _cache[ck] = (time.time(), dict(result))
+    with _jobs_lock:
+        _jobs[job_id].update(result, status="done", progress=100, step="Complete")
+
+
+def _start_job(mode: str, payload: dict, options: dict) -> str:
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "running", "progress": 0, "step": "Queued",
+                         "created": time.time()}
+    t = threading.Thread(target=_run_job, args=(job_id, mode, payload, options), daemon=True)
+    t.start()
+    # Prune old finished jobs (>1h)
+    with _jobs_lock:
+        now = time.time()
+        stale = [j for j, v in _jobs.items() if now - v.get("created", now) > 3600]
+        for j in stale:
+            _jobs.pop(j, None)
+    return job_id
+
+
+def _generate_docs(repo_url: str, options: dict) -> dict:
+    """Synchronous single-shot generation (legacy /generate-result endpoint)."""
+    result: dict[str, Any] = {}
+    repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "") or "project"
+    work_parent = DOCGEN_DIR / "tmp" / uuid.uuid4().hex[:12]
+    tmp_dir = work_parent / repo_name
+    try:
+        work_parent.mkdir(parents=True, exist_ok=True)
         _download_repo(repo_url, tmp_dir)
     except Exception as e:
+        shutil.rmtree(work_parent, ignore_errors=True)
         return {"error": f"Could not download repo: {e}"}
-
     try:
-        want_readme = options.get("readme", True)
-        want_api = options.get("api", True)
-        want_contributing = options.get("contributing", True)
-
-        if want_readme:
-            try:
-                result["readme"] = _generate_readme(tmp_dir)
-            except Exception as e:
-                result["readme"] = f"*README generation failed: {e}*"
-
-        if want_api:
-            try:
-                result["api_docs"] = _generate_api_docs(tmp_dir)
-            except Exception as e:
-                result["api_docs"] = f"*API docs generation failed: {e}*"
-
-        if want_contributing:
-            try:
-                result["contributing"] = _generate_contributing(tmp_dir)
-            except Exception as e:
-                result["contributing"] = f"*Contributing guide generation failed: {e}*"
-
+        for flag, key, label, fn in _DOC_STEPS:
+            default = flag in ("readme", "api", "contributing")
+            if options.get(flag, default):
+                try:
+                    result[key] = fn(tmp_dir)
+                except Exception as e:
+                    result[key] = f"*{label} failed: {e}*"
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
+        shutil.rmtree(work_parent, ignore_errors=True)
     result["repo"] = repo_url
     result["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return result
+
+
+# ---------------------------------------------------------------------------
+# Examples gallery (static — showcases output quality without spending tokens)
+# ---------------------------------------------------------------------------
+
+_EXAMPLES = [
+    {
+        "name": "flask",
+        "repo": "https://github.com/pallets/flask",
+        "lang": "Python",
+        "desc": "The Python micro web framework.",
+        "docs": ["readme", "api_docs", "architecture"],
+    },
+    {
+        "name": "express",
+        "repo": "https://github.com/expressjs/express",
+        "lang": "JavaScript",
+        "desc": "Fast, unopinionated web framework for Node.js.",
+        "docs": ["readme", "api_docs", "contributing"],
+    },
+    {
+        "name": "requests",
+        "repo": "https://github.com/psf/requests",
+        "lang": "Python",
+        "desc": "HTTP for Humans.",
+        "docs": ["readme", "api_docs", "env_example"],
+    },
+]
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +749,14 @@ class DocGenHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        path = self.path.split("?")[0].rstrip("/") or "/"
+        raw_path = self.path
+        path = raw_path.split("?")[0].rstrip("/") or "/"
+        query = {}
+        if "?" in raw_path:
+            for pair in raw_path.split("?", 1)[1].split("&"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    query[k] = v
 
         if path == "/":
             index = DOCGEN_DIR / "index.html"
@@ -465,7 +768,30 @@ class DocGenHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/health":
-            self._send({"status": "ok", "version": "1.0.0"})
+            self._send({"status": "ok", "version": _VERSION})
+            return
+
+        if path == "/stats":
+            with _stats_lock:
+                self._send({
+                    "total_docs": _stats.get("total_docs", 0),
+                    "total_repos": _stats.get("total_repos", 0),
+                })
+            return
+
+        if path == "/examples":
+            self._send({"examples": _EXAMPLES})
+            return
+
+        if path == "/generate-status":
+            job_id = query.get("job", "")
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                snapshot = dict(job) if job else None
+            if snapshot is None:
+                self._send({"error": "Unknown job"}, 404)
+            else:
+                self._send(snapshot)
             return
 
         if path == "/pricing":
@@ -473,7 +799,7 @@ class DocGenHandler(BaseHTTPRequestHandler):
                 "plans": [
                     {"id": "free", "name": "Free", "price": 0, "docs_per_day": 1, "features": ["1 README/day", "Basic templates"]},
                     {"id": "pro", "name": "Pro", "price": 9, "docs_per_day": 999,
-                     "features": ["Unlimited docs", "README + API + Contributing", "Priority generation", "Export as Markdown/HTML"]},
+                     "features": ["Unlimited docs", "All 6 doc types", "Mermaid diagrams", "Priority generation", "Export as Markdown/HTML"]},
                     {"id": "team", "name": "Team", "price": 29, "docs_per_day": 9999,
                      "features": ["Everything in Pro", "Team dashboard", "Custom branding", "API access", "Private repos"]},
                 ]
@@ -482,10 +808,9 @@ class DocGenHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/buy/"):
             plan = path.split("/buy/")[1]
-            # Lemon Squeezy checkout link
             links = {
-                "pro": "https://docgen.lemonsqueezy.com/buy/xxx-pro",
-                "team": "https://docgen.lemonsqueezy.com/buy/xxx-team",
+                "pro": os.environ.get("DOCGEN_BUY_PRO", "https://docgen.lemonsqueezy.com/buy/xxx-pro"),
+                "team": os.environ.get("DOCGEN_BUY_TEAM", "https://docgen.lemonsqueezy.com/buy/xxx-team"),
             }
             url = links.get(plan, links.get("pro"))
             self.send_response(302)
@@ -504,6 +829,48 @@ class DocGenHandler(BaseHTTPRequestHandler):
             self._send(_validate_license(key))
             return
 
+        if path == "/generate-start":
+            mode = body.get("mode", "url")
+            options = body.get("options", {}) or {}
+            license_key = body.get("license_key", "")
+
+            if mode == "url":
+                repo_url = body.get("url", "").strip()
+                if not repo_url or not re.match(r"^https?://github\.com/", repo_url):
+                    self._send({"error": "Invalid GitHub URL. Must be https://github.com/owner/repo"}, 400)
+                    return
+            elif mode == "paste":
+                if not body.get("code", "").strip():
+                    self._send({"error": "No code pasted."}, 400)
+                    return
+            elif mode == "zip":
+                if not body.get("zip_b64", ""):
+                    self._send({"error": "No zip uploaded."}, 400)
+                    return
+            else:
+                self._send({"error": f"Unknown input mode: {mode}"}, 400)
+                return
+
+            client_ip = (self.headers.get("X-Forwarded-For", "")
+                         .split(",")[0].strip() or self.client_address[0])
+            is_pro = bool(license_key) and _validate_license(license_key).get("valid", False)
+
+            if not is_pro:
+                _load_usage()
+                today_key = f"{client_ip}:{time.strftime('%Y-%m-%d')}"
+                entry = _usage.get(today_key, {"count": 0, "t": time.time()})
+                if entry["count"] >= 1:
+                    self._send({"error": "Free tier: 1 doc/day. Upgrade to Pro for unlimited."}, 402)
+                    return
+                entry["count"] += 1
+                entry["t"] = time.time()
+                _usage[today_key] = entry
+                _save_usage()
+
+            job_id = _start_job(mode, body, options)
+            self._send({"job": job_id, "status": "running"})
+            return
+
         if path == "/generate":
             repo_url = body.get("url", "").strip()
             license_key = body.get("license_key", "")
@@ -512,7 +879,6 @@ class DocGenHandler(BaseHTTPRequestHandler):
                 self._send({"error": "Invalid GitHub URL. Must be https://github.com/owner/repo"}, 400)
                 return
 
-            # Check license or free tier
             client_ip = (self.headers.get("X-Forwarded-For", "")
                          .split(",")[0].strip() or self.client_address[0])
             is_pro = False
@@ -554,9 +920,10 @@ class DocGenHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def serve(host: str = _HOST, port: int = _PORT) -> None:
+    _load_stats()
     server = ThreadingHTTPServer((host, port), DocGenHandler)
     server.daemon_threads = True
-    print(f"DocGen running at http://{host}:{port}")
+    print(f"DocGen v{_VERSION} running at http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
