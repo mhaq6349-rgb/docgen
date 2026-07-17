@@ -1,4 +1,4 @@
-﻿"""DocGen â€” AI Documentation Generator.
+"""DocGen — AI Documentation Generator.
 
 Zero-dependency HTTP server using stdlib only.
 - GET  /          serves the index.html
@@ -29,7 +29,7 @@ _HOST = os.environ.get("DOCGEN_HOST", "0.0.0.0")
 _PORT = int(os.environ.get("PORT", "8326"))
 
 # ---------------------------------------------------------------------------
-# License key system (HMAC-based â€” no DB needed)
+# License key system (HMAC-based — no DB needed)
 # ---------------------------------------------------------------------------
 
 _SECRET = os.environ.get("DOCGEN_SECRET", "change-me-in-production")
@@ -78,8 +78,61 @@ def _validate_license(key: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# LLM doc generation (wraps forge modules)
+# LLM doc generation (self-contained, direct OpenRouter API)
 # ---------------------------------------------------------------------------
+
+_OPENROUTER_KEY: str | None = None
+
+
+def _get_key() -> str:
+    global _OPENROUTER_KEY
+    if _OPENROUTER_KEY:
+        return _OPENROUTER_KEY
+    key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    if not key:
+        try:
+            auth = Path.home() / ".config" / "opencode" / "auth.json"
+            if auth.exists():
+                data = json.loads(auth.read_text())
+                key = data.get("OPENROUTER_API_KEY", "") or data.get("openai_api_key", "")
+        except (OSError, json.JSONDecodeError):
+            pass
+    _OPENROUTER_KEY = key
+    return key
+
+
+def _llm_ask(prompt: str, system: str = "", temperature: float = 0.3,
+             max_tokens: int = 4096) -> str:
+    key = _get_key()
+    if not key:
+        raise RuntimeError("No API key found")
+
+    model = "tencent/hy3:free"
+    body = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system or "You are a technical documentation expert."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+            "HTTP-Referer": "https://docgen.pro",
+        },
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=60)
+        data = json.loads(resp.read())
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        raise RuntimeError(f"LLM call failed: {e}")
 
 
 def _detect_language(filepath: str) -> str:
@@ -88,13 +141,90 @@ def _detect_language(filepath: str) -> str:
             "js": "javascript", "rs": "rust", "go": "go"}.get(ext.lstrip("."), "python")
 
 
+def _first_lines(source_dir: Path, pattern: str, n: int = 100) -> list[tuple[str, str]]:
+    results = []
+    for f in sorted(source_dir.glob(pattern)):
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            content = "\n".join(lines[:n])
+            if content.strip():
+                results.append((f.name, content))
+        except OSError:
+            pass
+    return results
+
+
+def _generate_readme(tmp_dir: Path) -> str:
+    context_parts = []
+    project_name = tmp_dir.resolve().name
+
+    for name, content in _first_lines(tmp_dir, "README*"):
+        context_parts.append(f"--- Existing README ({name}) ---\n{content}\n")
+    for name, content in _first_lines(tmp_dir, "pyproject.toml") or \
+                          _first_lines(tmp_dir, "package.json") or \
+                          _first_lines(tmp_dir, "Cargo.toml") or \
+                          _first_lines(tmp_dir, "go.mod"):
+        context_parts.append(f"--- {name} ---\n{content}\n")
+    for name, content in _first_lines(tmp_dir, "src/**/*.py")[:5] or \
+                          _first_lines(tmp_dir, "*.py")[:5]:
+        context_parts.append(f"--- {name} (first 100 lines) ---\n{content}\n")
+
+    context = "\n".join(context_parts)
+    prompt = (
+        f"Generate a comprehensive README.md for the project '{project_name}'. "
+        f"Include: project name, description, installation, usage, API overview, "
+        f"configuration, license. Use Markdown.\n\nProject context:\n{context}"
+    )
+    return _llm_ask(prompt, temperature=0.3, max_tokens=4096)
+
+
+def _generate_api_docs(tmp_dir: Path) -> str:
+    api_parts = []
+    for f in sorted(tmp_dir.rglob("*.py")):
+        if "test" in f.name or "__pycache__" in str(f):
+            continue
+        try:
+            src = f.read_text(encoding="utf-8", errors="replace")
+            if not src.strip():
+                continue
+            lang = _detect_language(str(f))
+            prompt = (
+                f"Generate comprehensive API documentation for this {lang} source code. "
+                f"Include: module purpose, public functions with signatures, classes with "
+                f"methods, parameters, return types, usage examples. Format as Markdown.\n\n"
+                f"```{lang}\n{src}\n```"
+            )
+            docs = _llm_ask(prompt, temperature=0.3, max_tokens=4096)
+            if docs:
+                api_parts.append(f"## {f.relative_to(tmp_dir)}\n\n{docs}")
+        except Exception:
+            pass
+    return "\n\n".join(api_parts) if api_parts else "*No API docs generated*"
+
+
+def _generate_contributing(tmp_dir: Path) -> str:
+    context_parts = []
+    for name, content in _first_lines(tmp_dir, "CONTRIBUTING*"):
+        context_parts.append(f"--- Existing {name} ---\n{content}\n")
+    for name, content in _first_lines(tmp_dir, ".github/**/*.md"):
+        context_parts.append(f"--- {name} ---\n{content}\n")
+    for name, content in _first_lines(tmp_dir, "pyproject.toml") or \
+                          _first_lines(tmp_dir, "package.json"):
+        context_parts.append(f"--- {name} ---\n{content}\n")
+
+    context = "\n".join(context_parts)
+    prompt = (
+        f"Generate a CONTRIBUTING.md guide. Include: how to set up the dev environment, "
+        f"how to run tests, code style guidelines, PR process, and issue reporting. "
+        f"Use Markdown.\n\nProject context:\n{context}"
+    )
+    return _llm_ask(prompt, temperature=0.3, max_tokens=4096)
+
+
 def _generate_docs(repo_url: str, options: dict) -> dict:
     """Generate documentation for a repo. Returns {readme, api_docs, contributing}."""
-    from docs.llm_generate import llm_readme, llm_api_docs, llm_contributing
+    result: dict[str, str] = {}
 
-    result = {}
-
-    # Clone or fetch the repo
     repo_name = repo_url.rstrip("/").split("/")[-1] or "project"
     tmp_dir = DOCGEN_DIR / "tmp" / repo_name
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -103,7 +233,7 @@ def _generate_docs(repo_url: str, options: dict) -> dict:
         import subprocess
         subprocess.run(
             ["git", "clone", "--depth", "1", repo_url, str(tmp_dir)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=120,
         )
     except Exception as e:
         return {"error": f"Could not clone repo: {e}"}
@@ -111,31 +241,23 @@ def _generate_docs(repo_url: str, options: dict) -> dict:
     try:
         if options.get("readme", True):
             try:
-                result["readme"] = llm_readme(str(tmp_dir))
+                result["readme"] = _generate_readme(tmp_dir)
             except Exception as e:
                 result["readme"] = f"*README generation failed: {e}*"
 
         if options.get("api", True):
-            api_parts = []
-            for f in sorted(tmp_dir.rglob("*.py")):
-                if "test" not in f.name and "__pycache__" not in str(f):
-                    try:
-                        src = f.read_text(encoding="utf-8")
-                        docs = llm_api_docs(src, str(f))
-                        if docs:
-                            api_parts.append(f"## {f.relative_to(tmp_dir)}\n\n{docs}")
-                    except Exception:
-                        pass
-            result["api_docs"] = "\n\n".join(api_parts) if api_parts else "*No API docs generated*"
+            try:
+                result["api_docs"] = _generate_api_docs(tmp_dir)
+            except Exception as e:
+                result["api_docs"] = f"*API docs generation failed: {e}*"
 
         if options.get("contributing", True):
             try:
-                result["contributing"] = llm_contributing(str(tmp_dir))
+                result["contributing"] = _generate_contributing(tmp_dir)
             except Exception as e:
                 result["contributing"] = f"*Contributing guide generation failed: {e}*"
 
     finally:
-        # Cleanup
         import shutil
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -293,4 +415,3 @@ def serve(host: str = _HOST, port: int = _PORT) -> None:
 
 if __name__ == "__main__":
     serve()
-
