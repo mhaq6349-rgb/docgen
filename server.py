@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import uuid
+import zipfile
 from html import escape
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -223,22 +226,42 @@ def _generate_contributing(tmp_dir: Path) -> str:
     return _llm_ask(prompt, temperature=0.3, max_tokens=4096)
 
 
+def _download_repo(repo_url: str, dst: Path) -> str:
+    """Download a GitHub repo as zip using stdlib. Returns project name."""
+    parts = repo_url.rstrip("/").split("/")
+    owner, repo = parts[-2], parts[-1].replace(".git", "")
+    zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
+
+    try:
+        resp = urlopen(Request(zip_url), timeout=30)
+    except URLError:
+        zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+        resp = urlopen(Request(zip_url), timeout=30)
+
+    data = resp.read()
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        # First entry is the root dir: {repo}-{branch}/
+        root = zf.namelist()[0].rstrip("/")
+        zf.extractall(dst.parent)
+        extracted = dst.parent / root
+        if extracted.exists():
+            extracted.rename(dst)
+    return repo
+
+
 def _generate_docs(repo_url: str, options: dict) -> dict:
     """Generate documentation for a repo. Returns {readme, api_docs, contributing}."""
     result: dict[str, str] = {}
 
-    repo_name = repo_url.rstrip("/").split("/")[-1] or "project"
+    repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "") or "project"
     tmp_dir = DOCGEN_DIR / "tmp" / repo_name
-    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        import subprocess
-        subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, str(tmp_dir)],
-            capture_output=True, text=True, timeout=120,
-        )
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        _download_repo(repo_url, tmp_dir)
     except Exception as e:
-        return {"error": f"Could not clone repo: {e}"}
+        return {"error": f"Could not download repo: {e}"}
 
     try:
         if options.get("readme", True):
@@ -260,7 +283,6 @@ def _generate_docs(repo_url: str, options: dict) -> dict:
                 result["contributing"] = f"*Contributing guide generation failed: {e}*"
 
     finally:
-        import shutil
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     result["repo"] = repo_url
