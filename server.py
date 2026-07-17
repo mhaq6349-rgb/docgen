@@ -20,6 +20,8 @@ from html import escape
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 DOCGEN_DIR = Path(__file__).resolve().parent
 FORGE_HOME = DOCGEN_DIR.parent.parent
@@ -118,7 +120,7 @@ def _llm_ask(prompt: str, system: str = "", temperature: float = 0.3,
         "max_tokens": max_tokens,
     }).encode()
 
-    req = urllib.request.Request(
+    req = Request(
         "https://openrouter.ai/api/v1/chat/completions",
         data=body,
         headers={
@@ -128,7 +130,7 @@ def _llm_ask(prompt: str, system: str = "", temperature: float = 0.3,
         },
     )
     try:
-        resp = urllib.request.urlopen(req, timeout=60)
+        resp = urlopen(req, timeout=60)
         data = json.loads(resp.read())
         return data["choices"][0]["message"]["content"]
     except Exception as e:
