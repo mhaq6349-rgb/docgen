@@ -1,4 +1,4 @@
-"""DocGen — AI Documentation Generator.
+﻿"""DocGen â€” AI Documentation Generator.
 
 Zero-dependency HTTP server using stdlib only.
 - GET  /          serves the index.html
@@ -25,11 +25,11 @@ DOCGEN_DIR = Path(__file__).resolve().parent
 FORGE_HOME = DOCGEN_DIR.parent.parent
 sys.path.insert(0, str(FORGE_HOME))
 
-_HOST = os.environ.get("DOCGEN_HOST", "127.0.0.1")
-_PORT = 8326
+_HOST = os.environ.get("DOCGEN_HOST", "0.0.0.0")
+_PORT = int(os.environ.get("PORT", "8326"))
 
 # ---------------------------------------------------------------------------
-# License key system (HMAC-based — no DB needed)
+# License key system (HMAC-based â€” no DB needed)
 # ---------------------------------------------------------------------------
 
 _SECRET = os.environ.get("DOCGEN_SECRET", "change-me-in-production")
@@ -293,3 +293,4 @@ def serve(host: str = _HOST, port: int = _PORT) -> None:
 
 if __name__ == "__main__":
     serve()
+
