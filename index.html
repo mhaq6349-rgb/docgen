@@ -157,8 +157,8 @@
   .tab-content { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 0 var(--radius) var(--radius) var(--radius); padding: 1.5rem; }
   .tab-content.active { display: block; }
   .tab-content pre { white-space: pre-wrap; font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace; font-size: .8rem; line-height: 1.5; max-height: 60vh; overflow-y: auto; }
-  .tab-content .copy-btn {
-    float: right;
+  .doc-toolbar { display: flex; gap: .5rem; justify-content: flex-end; margin-bottom: 1rem; }
+  .copy-btn {
     padding: .3rem .8rem;
     font-size: .75rem;
     border-radius: 6px;
@@ -166,9 +166,22 @@
     background: var(--surface-2);
     color: var(--text-dim);
     cursor: pointer;
-    margin-bottom: .5rem;
   }
-  .tab-content .copy-btn:hover { border-color: var(--accent); color: var(--text); }
+  .copy-btn:hover { border-color: var(--accent); color: var(--text); }
+  .markdown-body { max-height: 65vh; overflow-y: auto; line-height: 1.65; font-size: .92rem; }
+  .markdown-body h1 { font-size: 1.6rem; margin: 1.2rem 0 .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  .markdown-body h2 { font-size: 1.3rem; margin: 1.1rem 0 .6rem; padding-bottom: .25rem; border-bottom: 1px solid var(--border); }
+  .markdown-body h3 { font-size: 1.1rem; margin: 1rem 0 .5rem; }
+  .markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1rem; margin: .8rem 0 .4rem; }
+  .markdown-body p { margin: .6rem 0; }
+  .markdown-body ul, .markdown-body ol { margin: .6rem 0 .6rem 1.5rem; }
+  .markdown-body li { margin: .25rem 0; }
+  .markdown-body code { background: var(--surface-2); padding: .12rem .4rem; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', monospace; font-size: .85em; }
+  .markdown-body pre.code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: .8rem 0; }
+  .markdown-body pre.code code { background: none; padding: 0; font-size: .82rem; line-height: 1.5; white-space: pre; }
+  .markdown-body blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; margin: .8rem 0; color: var(--text-dim); }
+  .markdown-body a { color: var(--accent); }
+  .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 1.2rem 0; }
 
   /* Pricing */
   #pricing {
@@ -421,6 +434,54 @@ async function generate() {
   }
 }
 
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Minimal, safe Markdown -> HTML renderer (escapes first, then formats).
+function renderMarkdown(md) {
+  const lines = md.split('\n');
+  let html = '';
+  let inCode = false, codeLang = '', codeBuf = [];
+  let inList = false, listType = '';
+  const inline = (t) => escapeHtml(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const closeList = () => { if (inList) { html += `</${listType}>`; inList = false; } };
+
+  for (let raw of lines) {
+    const fence = raw.match(/^```(\w*)/);
+    if (fence) {
+      if (inCode) { html += `<pre class="code"><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`; inCode = false; codeBuf = []; }
+      else { closeList(); inCode = true; codeLang = fence[1]; }
+      continue;
+    }
+    if (inCode) { codeBuf.push(raw); continue; }
+
+    const h = raw.match(/^(#{1,6})\s+(.*)/);
+    if (h) { closeList(); html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; continue; }
+
+    if (/^\s*[-*+]\s+/.test(raw)) {
+      if (!inList || listType !== 'ul') { closeList(); html += '<ul>'; inList = true; listType = 'ul'; }
+      html += `<li>${inline(raw.replace(/^\s*[-*+]\s+/, ''))}</li>`; continue;
+    }
+    if (/^\s*\d+\.\s+/.test(raw)) {
+      if (!inList || listType !== 'ol') { closeList(); html += '<ol>'; inList = true; listType = 'ol'; }
+      html += `<li>${inline(raw.replace(/^\s*\d+\.\s+/, ''))}</li>`; continue;
+    }
+    if (/^\s*>\s?/.test(raw)) { closeList(); html += `<blockquote>${inline(raw.replace(/^\s*>\s?/, ''))}</blockquote>`; continue; }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(raw)) { closeList(); html += '<hr>'; continue; }
+    if (raw.trim() === '') { closeList(); continue; }
+    closeList();
+    html += `<p>${inline(raw)}</p>`;
+  }
+  closeList();
+  if (inCode) html += `<pre class="code"><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
+  return html;
+}
+
 function showOutput(data) {
   const container = document.getElementById('output');
   container.style.display = 'block';
@@ -432,9 +493,9 @@ function showOutput(data) {
   contents.innerHTML = '';
 
   const sections = [
-    { id: 'readme', label: 'README', content: data.readme },
-    { id: 'api_docs', label: 'API Docs', content: data.api_docs },
-    { id: 'contributing', label: 'Contributing', content: data.contributing },
+    { id: 'readme', label: 'README', file: 'README.md', content: data.readme },
+    { id: 'api_docs', label: 'API Docs', file: 'API.md', content: data.api_docs },
+    { id: 'contributing', label: 'Contributing', file: 'CONTRIBUTING.md', content: data.contributing },
   ];
 
   const isError = (c) => !c || (c.startsWith('*') && c.endsWith('*') && c.includes('failed'));
@@ -456,6 +517,13 @@ function showOutput(data) {
     div.className = 'tab-content' + (active ? ' active' : '');
     div.id = 'tab-' + s.id;
 
+    const bar = document.createElement('div');
+    bar.className = 'doc-toolbar';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'copy-btn';
+    toggleBtn.textContent = 'View Raw';
+
     const copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn';
     copyBtn.textContent = 'Copy';
@@ -465,10 +533,40 @@ function showOutput(data) {
       setTimeout(() => copyBtn.textContent = 'Copy', 2000);
     };
 
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'copy-btn';
+    dlBtn.textContent = 'Download';
+    dlBtn.onclick = () => {
+      const blob = new Blob([s.content], { type: 'text/markdown' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = s.file;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+
+    bar.appendChild(toggleBtn);
+    bar.appendChild(copyBtn);
+    bar.appendChild(dlBtn);
+
+    const rendered = document.createElement('div');
+    rendered.className = 'markdown-body';
+    rendered.innerHTML = renderMarkdown(s.content);
+
     const pre = document.createElement('pre');
     pre.textContent = s.content;
+    pre.style.display = 'none';
 
-    div.appendChild(copyBtn);
+    let rawMode = false;
+    toggleBtn.onclick = () => {
+      rawMode = !rawMode;
+      rendered.style.display = rawMode ? 'none' : 'block';
+      pre.style.display = rawMode ? 'block' : 'none';
+      toggleBtn.textContent = rawMode ? 'View Rendered' : 'View Raw';
+    };
+
+    div.appendChild(bar);
+    div.appendChild(rendered);
     div.appendChild(pre);
     contents.appendChild(div);
   });
@@ -477,7 +575,7 @@ function showOutput(data) {
     const div = document.createElement('div');
     div.className = 'tab-content active';
     const pre = document.createElement('pre');
-    pre.textContent = 'Generation returned no content. Check that OPENROUTER_API_KEY is set, then try again.\n\n' +
+    pre.textContent = 'Generation returned no content. Make sure OPENROUTER_API_KEY is set on the server, then try again.\n\nRaw response:\n' +
       JSON.stringify(data, null, 2);
     div.appendChild(pre);
     contents.appendChild(div);
